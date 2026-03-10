@@ -4,7 +4,7 @@ import Footer from "@/components/Footer";
 import Marquee from "@/components/Marquee";
 import RevealOnScroll from "@/components/RevealOnScroll";
 import CustomCursor from "@/components/CustomCursor";
-import { getSiteData } from "@/lib/portfolio-data";
+import { fetchSiteData, SiteData, getSiteData } from "@/lib/portfolio-data";
 
 const CameraSVG = () => (
   <svg viewBox="0 0 260 300" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full">
@@ -48,11 +48,11 @@ const polaroidBgs = [
 ];
 
 export default function Works() {
-  const [data, setData] = useState(getSiteData());
+  const [data, setData] = useState<SiteData>(getSiteData());
   const [activeFilter, setActiveFilter] = useState("All");
 
   useEffect(() => {
-    setData(getSiteData());
+    fetchSiteData().then(setData);
   }, []);
 
   const filters = ["All", "Fashion", "Video", "Brand", "Hosting"];

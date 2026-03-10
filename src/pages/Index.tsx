@@ -5,13 +5,13 @@ import Footer from "@/components/Footer";
 import Marquee from "@/components/Marquee";
 import RevealOnScroll from "@/components/RevealOnScroll";
 import CustomCursor from "@/components/CustomCursor";
-import { getSiteData } from "@/lib/portfolio-data";
+import { fetchSiteData, SiteData, getSiteData } from "@/lib/portfolio-data";
 
 const Index = () => {
-  const [data, setData] = useState(getSiteData());
+  const [data, setData] = useState<SiteData>(getSiteData());
 
   useEffect(() => {
-    setData(getSiteData());
+    fetchSiteData().then(setData);
   }, []);
 
   const titleLines = data.heroTitle.split("\n");

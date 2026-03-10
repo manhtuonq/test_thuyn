@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  getSiteData,
-  saveSiteData,
+  fetchSiteData,
+  saveSiteDataToDB,
   isAdminLoggedIn,
   adminLogin,
   adminLogout,
@@ -48,16 +48,31 @@ function LoginForm({ onLogin }: { onLogin: () => void }) {
 }
 
 function AdminDashboard() {
-  const [data, setData] = useState<SiteData>(getSiteData());
+  const [data, setData] = useState<SiteData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<"general" | "services" | "works" | "testimonials" | "polaroids">("general");
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  const save = (updates: Partial<SiteData>) => {
-    const newData = { ...data, ...updates };
-    saveSiteData(newData);
-    setData(newData);
-    toast({ title: "Đã lưu!", description: "Thay đổi đã được cập nhật." });
+  useEffect(() => {
+    fetchSiteData().then((d) => {
+      setData(d);
+      setLoading(false);
+    });
+  }, []);
+
+  const save = async (updates: Partial<SiteData>) => {
+    setSaving(true);
+    const success = await saveSiteDataToDB(updates);
+    if (success) {
+      const newData = await fetchSiteData();
+      setData(newData);
+      toast({ title: "Đã lưu!", description: "Thay đổi đã được cập nhật vào database." });
+    } else {
+      toast({ title: "Lỗi!", description: "Không thể lưu. Vui lòng thử lại.", variant: "destructive" });
+    }
+    setSaving(false);
   };
 
   const handleLogout = () => {
@@ -65,6 +80,10 @@ function AdminDashboard() {
     navigate("/admin");
     window.location.reload();
   };
+
+  if (loading || !data) {
+    return <div className="min-h-screen flex items-center justify-center bg-background"><p>Đang tải...</p></div>;
+  }
 
   const tabs = [
     { key: "general" as const, label: "Tổng quan" },
@@ -76,7 +95,6 @@ function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <div className="border-b border-border px-6 py-4 flex items-center justify-between">
         <h1 className="font-playfair text-xl font-bold">Admin Panel</h1>
         <div className="flex gap-3">
@@ -85,7 +103,6 @@ function AdminDashboard() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="border-b border-border px-6 flex gap-1 overflow-x-auto">
         {tabs.map((tab) => (
           <button
@@ -152,7 +169,7 @@ function AdminDashboard() {
                   <label className="text-sm font-medium mb-1 block">Marquee Items (phẩy cách)</label>
                   <Input value={data.marqueeItems.join(", ")} onChange={(e) => setData({ ...data, marqueeItems: e.target.value.split(",").map(s => s.trim()) })} />
                 </div>
-                <Button onClick={() => save(data)}>Lưu thay đổi</Button>
+                <Button disabled={saving} onClick={() => save(data)}>{saving ? "Đang lưu..." : "Lưu thay đổi"}</Button>
               </CardContent>
             </Card>
           </div>
@@ -187,7 +204,7 @@ function AdminDashboard() {
             <Button onClick={() => setData({ ...data, services: [...data.services, { num: String(data.services.length + 1).padStart(2, "0"), icon: "✦", title: "Mới", desc: "Mô tả" }] })}>
               + Thêm dịch vụ
             </Button>
-            <Button className="ml-3" onClick={() => save({ services: data.services })}>Lưu</Button>
+            <Button className="ml-3" disabled={saving} onClick={() => save({ services: data.services })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
           </div>
         )}
 
@@ -214,7 +231,7 @@ function AdminDashboard() {
             <Button onClick={() => setData({ ...data, workItems: [...data.workItems, { id: Date.now().toString(), category: "New", name: "New Work", bgClass: "bg-gradient-to-br from-[#E8D8D0] to-[#D4B8A8]" }] })}>
               + Thêm tác phẩm
             </Button>
-            <Button className="ml-3" onClick={() => save({ workItems: data.workItems })}>Lưu</Button>
+            <Button className="ml-3" disabled={saving} onClick={() => save({ workItems: data.workItems })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
           </div>
         )}
 
@@ -247,7 +264,7 @@ function AdminDashboard() {
             <Button onClick={() => setData({ ...data, testimonials: [...data.testimonials, { text: "Mới", name: "Tên", role: "Role", avatar: "N" }] })}>
               + Thêm đánh giá
             </Button>
-            <Button className="ml-3" onClick={() => save({ testimonials: data.testimonials })}>Lưu</Button>
+            <Button className="ml-3" disabled={saving} onClick={() => save({ testimonials: data.testimonials })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
           </div>
         )}
 
@@ -292,7 +309,7 @@ function AdminDashboard() {
             <Button onClick={() => setData({ ...data, polaroids: [...data.polaroids, { id: Date.now().toString(), category: "New", caption: "New", badgeStyle: "default", width: "224px", rotation: "0deg" }] })}>
               + Thêm polaroid
             </Button>
-            <Button className="ml-3" onClick={() => save({ polaroids: data.polaroids })}>Lưu</Button>
+            <Button className="ml-3" disabled={saving} onClick={() => save({ polaroids: data.polaroids })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
           </div>
         )}
       </div>
