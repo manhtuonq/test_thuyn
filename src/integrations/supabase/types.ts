@@ -14,20 +14,26 @@ export type Database = {
   }
   public: {
     Tables: {
-      site_settings: {
+      posts: {
         Row: {
-          data: Json
+          content: string | null
+          created_at: string
           id: string
+          title: string
           updated_at: string
         }
         Insert: {
-          data?: Json
+          content?: string | null
+          created_at?: string
           id?: string
+          title: string
           updated_at?: string
         }
         Update: {
-          data?: Json
+          content?: string | null
+          created_at?: string
           id?: string
+          title?: string
           updated_at?: string
         }
         Relationships: []

@@ -1,328 +1,262 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  fetchSiteData,
-  saveSiteDataToDB,
-  isAdminLoggedIn,
-  adminLogin,
-  adminLogout,
-  SiteData,
-} from "@/lib/portfolio-data";
+import { supabase } from "@/integrations/supabase/client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useToast } from "@/hooks/use-toast";
+import type { Session } from "@supabase/supabase-js";
 
-function LoginForm({ onLogin }: { onLogin: () => void }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+type Post = {
+  id: string;
+  title: string;
+  content: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const Admin = () => {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Form state
+  const [editingPost, setEditingPost] = useState<Post | null>(null);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setLoading(false);
+      if (!session) navigate("/login");
+    });
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+      if (!session) navigate("/login");
+    });
+
+    return () => subscription.unsubscribe();
+  }, [navigate]);
+
+  const { data: posts } = useQuery({
+    queryKey: ["posts"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("posts")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data as Post[];
+    },
+    enabled: !!session,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async ({ title, content }: { title: string; content: string }) => {
+      const { error } = await supabase.from("posts").insert({ title, content });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      resetForm();
+      triggerSaved();
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, title, content }: { id: string; title: string; content: string }) => {
+      const { error } = await supabase.from("posts").update({ title, content }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      resetForm();
+      triggerSaved();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("posts").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      if (editingPost) resetForm();
+    },
+  });
+
+  const resetForm = () => {
+    setEditingPost(null);
+    setTitle("");
+    setContent("");
+  };
+
+  const triggerSaved = () => {
+    setSaveState("saved");
+    setTimeout(() => setSaveState("idle"), 1500);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (adminLogin(username, password)) {
-      onLogin();
+    if (!title.trim()) return;
+    setSaveState("saving");
+    if (editingPost) {
+      updateMutation.mutate({ id: editingPost.id, title, content });
     } else {
-      setError("Sai tên đăng nhập hoặc mật khẩu!");
+      createMutation.mutate({ title, content });
     }
   };
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="font-playfair text-2xl text-center">Admin Login</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <Input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-            <Input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="w-full">Đăng nhập</Button>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function AdminDashboard() {
-  const [data, setData] = useState<SiteData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<"general" | "services" | "works" | "testimonials" | "polaroids">("general");
-  const { toast } = useToast();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    fetchSiteData().then((d) => {
-      setData(d);
-      setLoading(false);
-    });
-  }, []);
-
-  const save = async (updates: Partial<SiteData>) => {
-    setSaving(true);
-    const success = await saveSiteDataToDB(updates);
-    if (success) {
-      const newData = await fetchSiteData();
-      setData(newData);
-      toast({ title: "Đã lưu!", description: "Thay đổi đã được cập nhật vào database." });
-    } else {
-      toast({ title: "Lỗi!", description: "Không thể lưu. Vui lòng thử lại.", variant: "destructive" });
-    }
-    setSaving(false);
+  const startEdit = (post: Post) => {
+    setEditingPost(post);
+    setTitle(post.title);
+    setContent(post.content || "");
+    setSaveState("idle");
   };
 
-  const handleLogout = () => {
-    adminLogout();
-    navigate("/admin");
-    window.location.reload();
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/");
   };
 
-  if (loading || !data) {
-    return <div className="min-h-screen flex items-center justify-center bg-background"><p>Đang tải...</p></div>;
-  }
-
-  const tabs = [
-    { key: "general" as const, label: "Tổng quan" },
-    { key: "services" as const, label: "Dịch vụ" },
-    { key: "works" as const, label: "Tác phẩm" },
-    { key: "testimonials" as const, label: "Đánh giá" },
-    { key: "polaroids" as const, label: "Polaroids" },
-  ];
+  if (loading) return null;
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="border-b border-border px-6 py-4 flex items-center justify-between">
-        <h1 className="font-playfair text-xl font-bold">Admin Panel</h1>
-        <div className="flex gap-3">
-          <Button variant="outline" size="sm" onClick={() => navigate("/")}>Xem trang</Button>
-          <Button variant="destructive" size="sm" onClick={handleLogout}>Đăng xuất</Button>
+    <div className="min-h-screen bg-background text-foreground font-heading">
+      {/* Header */}
+      <header className="border-b border-border">
+        <div className="container max-w-[1100px] mx-auto px-8 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <h1 className="text-lg font-bold">Quản trị</h1>
+            <span className="text-xs font-mono px-2 py-0.5 rounded-sm bg-admin/10 text-admin">
+              admin
+            </span>
+          </div>
+          <div className="flex gap-3">
+            <Button variant="ghost" size="sm" onClick={() => navigate("/")}>
+              Xem trang
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              Đăng xuất
+            </Button>
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="border-b border-border px-6 flex gap-1 overflow-x-auto">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
-              activeTab === tab.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="p-6 max-w-4xl mx-auto">
-        {activeTab === "general" && (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader><CardTitle>Thông tin chung</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Logo</label>
-                  <Input value={data.logo} onChange={(e) => setData({ ...data, logo: e.target.value })} />
+      <main className="container max-w-[1100px] mx-auto px-8 py-8">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-8">
+          {/* Left: Form */}
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">
+              {editingPost ? "Chỉnh sửa bài viết" : "Tạo bài viết mới"}
+            </h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-[72px_1fr] items-center gap-2">
+                <label className="text-sm font-medium text-right">Tiêu đề</label>
+                <Input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="font-mono text-sm"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-[72px_1fr] items-start gap-2">
+                <label className="text-sm font-medium text-right pt-2">Nội dung</label>
+                <Textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  className="font-mono text-sm min-h-[160px]"
+                  rows={6}
+                />
+              </div>
+              <div className="grid grid-cols-[72px_1fr] gap-2">
+                <div />
+                <div className="flex gap-2">
+                  <Button
+                    type="submit"
+                    disabled={saveState === "saving"}
+                    className={saveState === "saved" ? "animate-save-fade border" : ""}
+                  >
+                    {saveState === "saved" ? "Đã lưu" : saveState === "saving" ? "Đang lưu..." : "Lưu"}
+                  </Button>
+                  {editingPost && (
+                    <Button type="button" variant="ghost" onClick={resetForm}>
+                      Hủy
+                    </Button>
+                  )}
                 </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Hero Tag</label>
-                  <Input value={data.heroTag} onChange={(e) => setData({ ...data, heroTag: e.target.value })} />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Hero Title (dùng \n để xuống dòng)</label>
-                  <Textarea value={data.heroTitle} onChange={(e) => setData({ ...data, heroTitle: e.target.value })} />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Hero Subtitle</label>
-                  <Textarea value={data.heroSubtitle} onChange={(e) => setData({ ...data, heroSubtitle: e.target.value })} />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Hero Photo URL</label>
-                  <Input value={data.heroPhotoUrl} onChange={(e) => setData({ ...data, heroPhotoUrl: e.target.value })} placeholder="https://..." />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">Stats Number</label>
-                    <Input value={data.heroStatsNum} onChange={(e) => setData({ ...data, heroStatsNum: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">Stats Label</label>
-                    <Input value={data.heroStatsLabel} onChange={(e) => setData({ ...data, heroStatsLabel: e.target.value })} />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Email</label>
-                  <Input value={data.contactEmail} onChange={(e) => setData({ ...data, contactEmail: e.target.value })} />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Location</label>
-                  <Input value={data.contactLocation} onChange={(e) => setData({ ...data, contactLocation: e.target.value })} />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Skills (phẩy cách)</label>
-                  <Input value={data.skills.join(", ")} onChange={(e) => setData({ ...data, skills: e.target.value.split(",").map(s => s.trim()) })} />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Marquee Items (phẩy cách)</label>
-                  <Input value={data.marqueeItems.join(", ")} onChange={(e) => setData({ ...data, marqueeItems: e.target.value.split(",").map(s => s.trim()) })} />
-                </div>
-                <Button disabled={saving} onClick={() => save(data)}>{saving ? "Đang lưu..." : "Lưu thay đổi"}</Button>
-              </CardContent>
-            </Card>
+              </div>
+            </form>
           </div>
-        )}
 
-        {activeTab === "services" && (
-          <div className="space-y-4">
-            {data.services.map((svc, i) => (
-              <Card key={i}>
-                <CardContent className="pt-6 space-y-3">
-                  <div className="grid grid-cols-3 gap-3">
-                    <Input placeholder="Số" value={svc.num} onChange={(e) => {
-                      const s = [...data.services]; s[i] = { ...s[i], num: e.target.value }; setData({ ...data, services: s });
-                    }} />
-                    <Input placeholder="Icon" value={svc.icon} onChange={(e) => {
-                      const s = [...data.services]; s[i] = { ...s[i], icon: e.target.value }; setData({ ...data, services: s });
-                    }} />
-                    <Input placeholder="Tiêu đề" value={svc.title} onChange={(e) => {
-                      const s = [...data.services]; s[i] = { ...s[i], title: e.target.value }; setData({ ...data, services: s });
-                    }} />
+          {/* Right: Post list */}
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">
+              Danh sách bài viết
+            </h2>
+            {!posts || posts.length === 0 ? (
+              <p className="font-mono text-sm text-muted-foreground">Chưa có bài viết.</p>
+            ) : (
+              <div className="space-y-2">
+                {posts.map((post) => (
+                  <div
+                    key={post.id}
+                    className={`border rounded-sm p-4 transition-colors ${
+                      editingPost?.id === post.id
+                        ? "border-admin bg-admin/5"
+                        : "border-border bg-card"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-semibold text-sm truncate">{post.title}</h3>
+                        {post.content && (
+                          <p className="font-mono text-xs text-muted-foreground mt-1 line-clamp-2">
+                            {post.content}
+                          </p>
+                        )}
+                        <time className="block mt-2 text-xs font-mono text-muted-foreground">
+                          {new Date(post.updated_at).toLocaleDateString("vi-VN")}
+                        </time>
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => startEdit(post)}
+                          className="text-xs"
+                        >
+                          Sửa
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            if (confirm("Xóa bài viết này?")) {
+                              deleteMutation.mutate(post.id);
+                            }
+                          }}
+                          className="text-xs text-destructive hover:text-destructive"
+                        >
+                          Xóa
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  <Textarea placeholder="Mô tả" value={svc.desc} onChange={(e) => {
-                    const s = [...data.services]; s[i] = { ...s[i], desc: e.target.value }; setData({ ...data, services: s });
-                  }} />
-                  <Button variant="destructive" size="sm" onClick={() => {
-                    const s = data.services.filter((_, idx) => idx !== i);
-                    setData({ ...data, services: s });
-                  }}>Xóa</Button>
-                </CardContent>
-              </Card>
-            ))}
-            <Button onClick={() => setData({ ...data, services: [...data.services, { num: String(data.services.length + 1).padStart(2, "0"), icon: "✦", title: "Mới", desc: "Mô tả" }] })}>
-              + Thêm dịch vụ
-            </Button>
-            <Button className="ml-3" disabled={saving} onClick={() => save({ services: data.services })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-
-        {activeTab === "works" && (
-          <div className="space-y-4">
-            {data.workItems.map((item, i) => (
-              <Card key={i}>
-                <CardContent className="pt-6 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <Input placeholder="Category" value={item.category} onChange={(e) => {
-                      const w = [...data.workItems]; w[i] = { ...w[i], category: e.target.value }; setData({ ...data, workItems: w });
-                    }} />
-                    <Input placeholder="Tên" value={item.name} onChange={(e) => {
-                      const w = [...data.workItems]; w[i] = { ...w[i], name: e.target.value }; setData({ ...data, workItems: w });
-                    }} />
-                  </div>
-                  <Button variant="destructive" size="sm" onClick={() => {
-                    const w = data.workItems.filter((_, idx) => idx !== i);
-                    setData({ ...data, workItems: w });
-                  }}>Xóa</Button>
-                </CardContent>
-              </Card>
-            ))}
-            <Button onClick={() => setData({ ...data, workItems: [...data.workItems, { id: Date.now().toString(), category: "New", name: "New Work", bgClass: "bg-gradient-to-br from-[#E8D8D0] to-[#D4B8A8]" }] })}>
-              + Thêm tác phẩm
-            </Button>
-            <Button className="ml-3" disabled={saving} onClick={() => save({ workItems: data.workItems })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
-          </div>
-        )}
-
-        {activeTab === "testimonials" && (
-          <div className="space-y-4">
-            {data.testimonials.map((t, i) => (
-              <Card key={i}>
-                <CardContent className="pt-6 space-y-3">
-                  <Textarea placeholder="Nội dung" value={t.text} onChange={(e) => {
-                    const ts = [...data.testimonials]; ts[i] = { ...ts[i], text: e.target.value }; setData({ ...data, testimonials: ts });
-                  }} />
-                  <div className="grid grid-cols-3 gap-3">
-                    <Input placeholder="Tên" value={t.name} onChange={(e) => {
-                      const ts = [...data.testimonials]; ts[i] = { ...ts[i], name: e.target.value }; setData({ ...data, testimonials: ts });
-                    }} />
-                    <Input placeholder="Chức vụ" value={t.role} onChange={(e) => {
-                      const ts = [...data.testimonials]; ts[i] = { ...ts[i], role: e.target.value }; setData({ ...data, testimonials: ts });
-                    }} />
-                    <Input placeholder="Avatar" value={t.avatar} onChange={(e) => {
-                      const ts = [...data.testimonials]; ts[i] = { ...ts[i], avatar: e.target.value }; setData({ ...data, testimonials: ts });
-                    }} />
-                  </div>
-                  <Button variant="destructive" size="sm" onClick={() => {
-                    const ts = data.testimonials.filter((_, idx) => idx !== i);
-                    setData({ ...data, testimonials: ts });
-                  }}>Xóa</Button>
-                </CardContent>
-              </Card>
-            ))}
-            <Button onClick={() => setData({ ...data, testimonials: [...data.testimonials, { text: "Mới", name: "Tên", role: "Role", avatar: "N" }] })}>
-              + Thêm đánh giá
-            </Button>
-            <Button className="ml-3" disabled={saving} onClick={() => save({ testimonials: data.testimonials })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
-          </div>
-        )}
-
-        {activeTab === "polaroids" && (
-          <div className="space-y-4">
-            {data.polaroids.map((p, i) => (
-              <Card key={i}>
-                <CardContent className="pt-6 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <Input placeholder="Category" value={p.category} onChange={(e) => {
-                      const ps = [...data.polaroids]; ps[i] = { ...ps[i], category: e.target.value }; setData({ ...data, polaroids: ps });
-                    }} />
-                    <Input placeholder="Caption" value={p.caption} onChange={(e) => {
-                      const ps = [...data.polaroids]; ps[i] = { ...ps[i], caption: e.target.value }; setData({ ...data, polaroids: ps });
-                    }} />
-                  </div>
-                  <div className="grid grid-cols-3 gap-3">
-                    <Input placeholder="Width" value={p.width} onChange={(e) => {
-                      const ps = [...data.polaroids]; ps[i] = { ...ps[i], width: e.target.value }; setData({ ...data, polaroids: ps });
-                    }} />
-                    <Input placeholder="Rotation" value={p.rotation} onChange={(e) => {
-                      const ps = [...data.polaroids]; ps[i] = { ...ps[i], rotation: e.target.value }; setData({ ...data, polaroids: ps });
-                    }} />
-                    <select
-                      className="border border-input rounded-md px-3 py-2 text-sm bg-background"
-                      value={p.badgeStyle}
-                      onChange={(e) => {
-                        const ps = [...data.polaroids]; ps[i] = { ...ps[i], badgeStyle: e.target.value }; setData({ ...data, polaroids: ps });
-                      }}
-                    >
-                      <option value="default">Badge tối</option>
-                      <option value="light">Badge sáng</option>
-                    </select>
-                  </div>
-                  <Button variant="destructive" size="sm" onClick={() => {
-                    const ps = data.polaroids.filter((_, idx) => idx !== i);
-                    setData({ ...data, polaroids: ps });
-                  }}>Xóa</Button>
-                </CardContent>
-              </Card>
-            ))}
-            <Button onClick={() => setData({ ...data, polaroids: [...data.polaroids, { id: Date.now().toString(), category: "New", caption: "New", badgeStyle: "default", width: "224px", rotation: "0deg" }] })}>
-              + Thêm polaroid
-            </Button>
-            <Button className="ml-3" disabled={saving} onClick={() => save({ polaroids: data.polaroids })}>{saving ? "Đang lưu..." : "Lưu"}</Button>
-          </div>
-        )}
-      </div>
+        </div>
+      </main>
     </div>
   );
-}
+};
 
-export default function Admin() {
-  const [loggedIn, setLoggedIn] = useState(isAdminLoggedIn());
-
-  if (!loggedIn) {
-    return <LoginForm onLogin={() => setLoggedIn(true)} />;
-  }
-
-  return <AdminDashboard />;
-}
+export default Admin;
